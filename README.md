@@ -1,5 +1,5 @@
 # ETUnet
-ETUNet:Exploring Efficient Transformer Enhanced UNet For 3D Brain Tumor Segmentation
+ETUNet: Exploring Efficient Transformer Enhanced UNet For 3D Brain Tumor Segmentation
 
 # Architecture
 ![( ~YXGT9{`T5BSNDFY~MSUE](https://github.com/zhangyida-zhang/ETUnet/assets/57849111/a7183abf-3bff-4032-9d0f-9d85763552ee)
