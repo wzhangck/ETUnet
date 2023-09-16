@@ -1,5 +1,9 @@
-# ETUnet
+![8GALTH1UNU72F~__K(I7F7G](https://github.com/zhangyida-zhang/ETUnet/assets/57849111/d3d1867f-9a71-461b-96d6-c458247c4fb2)# ETUnet
 结合高效Transformer和UNet的3D脑肿瘤分割方法。
+
+# Architecture
+![8GALTH1UNU72F~__K(I7F7G](https://github.com/zhangyida-zhang/ETUnet/assets/57849111/c3f0e6bc-ff36-4b04-bc88-06447e2e5d96)
+![( ~YXGT9{`T5BSNDFY~MSUE](https://github.com/zhangyida-zhang/ETUnet/assets/57849111/a7183abf-3bff-4032-9d0f-9d85763552ee)
 
 # Data
 BRATS2020，BRATS2018
