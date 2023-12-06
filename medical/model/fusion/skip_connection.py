@@ -3,8 +3,28 @@ from torch import nn
 import torch
 from einops import rearrange
 from medical.model.fusion.layers import get_config, Mlp
+# from medical.model.encoder.depthwise_former import LayerNormChannel
 
+class LayerNormChannel(nn.Module):
+    """
+    LayerNorm only for Channel Dimension.
+    Input: tensor in shape [B, C, H, W, D]
+    """
 
+    def __init__(self, num_channels, eps=1e-6):
+        super().__init__()
+
+        self.weight = nn.Parameter(torch.ones(num_channels))
+        self.bias = nn.Parameter(torch.zeros(num_channels))
+        self.eps = eps
+
+    def forward(self, x):
+        u = x.mean(1, keepdim=True)
+        s = (x - u).pow(2).mean(1, keepdim=True)
+        x = (x - u) / torch.sqrt(s + self.eps)
+        x = self.weight.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) * x \
+            + self.bias.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+        return x
 class Embeddings(nn.Module):
     """Construct the embeddings from patch, position embeddings.
     """
@@ -24,19 +44,18 @@ class Embeddings(nn.Module):
                                           stride=patch_size
                                           )
 
+        self.norm = LayerNormChannel(num_channels=config.hidden_size)
+
         self.position_embeddings = nn.Parameter(torch.zeros(1, n_patches, config.hidden_size))  # [1,n_patches,128]
-        self.dropout = nn.Dropout(config.dropout_rate)
 
     def forward(self, x):
 
-        x = self.patch_embeddings(x)
+        x = self.norm(self.patch_embeddings(x))
 
         x = x.flatten(2)
         x = x.transpose(-1, -2)
         embeddings = x + self.position_embeddings
 
-
-        embeddings = self.dropout(embeddings)
         return embeddings  # [B,N,C]
 
 
@@ -94,6 +113,7 @@ class CrossAttBlock(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size  # 128
         self.config = config
+
         self.attention_norm = nn.LayerNorm(self.hidden_size, eps=1e-6)
         self.attention_norm_cross = nn.LayerNorm(self.hidden_size, eps=1e-6)
         self.ffn_norm = nn.LayerNorm(self.hidden_size, eps=1e-6)
@@ -103,20 +123,12 @@ class CrossAttBlock(nn.Module):
     def forward(self, q, kv):
 
         h = q
-
         attn = self.attn(q, kv)
-
         x = attn + h  # [B,N,C]
 
-        x = self.attention_norm_cross(x)
-
         h = x
-
-        x = self.ffn(x)
-
-        x = x + h
-
         x = self.ffn_norm(x)
+        x = self.ffn(x) + h
 
         return x
 
@@ -140,7 +152,7 @@ class TokenLearner(nn.Module):
         return out
 
 
-# 交叉注意力模块
+
 class CrossAttn(nn.Module):
     def __init__(self, in_channels,
                  hidden_size,
@@ -193,7 +205,7 @@ class CrossAttn(nn.Module):
             kv = rearrange(kv, "b (d w h) c -> b c d w h", d=self.img_size[0], w=self.img_size[1],
                            h=self.img_size[2])
 
-            kv = self.token_mixer(kv)  # 返回[B,S,C]
+            kv = self.token_mixer(kv)  # [B,S,C]
 
         batch_size = kv.shape[0]
 
