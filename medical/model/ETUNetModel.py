@@ -1,13 +1,13 @@
 import torch.nn as nn
-from encoder.depthwise_former import DWFormerEncoder, Convolution,  UpCat
-from fusion.nmafa import ESCA
+from .encoder.depthwise_former import DWFormerEncoder, Convolution,  UpCat
+from .fusion.nmafa import ESCA
 import torch
 from einops import rearrange
 
 
 class ETUNet(nn.Module):
-    def __init__(self, model_num,
-                 out_channels,
+    def __init__(self, model_num,# 4
+                 out_channels,# 3
                  image_size,
                  fea=(8, 8, 32, 64, 128, 8),
                  window_size=(2, 2, 2),
@@ -31,39 +31,28 @@ class ETUNet(nn.Module):
             image_size_s.append((image_size_s[-1][0] // p[0], image_size_s[-1][1] // p[1], image_size_s[-1][2] // p[2]))
 
         # new_image_size——[8,8,8]
-        new_image_size = [image_size[i] // pool_size_all[i] for i in range(3)]
+        self.new_image_size = [image_size[i] // pool_size_all[i] for i in range(3)]
 
         self.encoder = DWFormerEncoder(model_num=model_num,  # 4
                                        img_size=image_size_s[1:],
-                                       fea=fea,  # (16, 16, 32, 64, 128, 16)
+                                       fea=fea,  # (8, 8, 32, 64, 128, 8)
                                        pool_size=pool_size,
                                        )
 
         self.fusion = ESCA(model_num=model_num,
                            in_channels=fea[4],
                            hidden_size=fea[4],
-                           img_size=new_image_size,
+                           img_size=self.new_image_size,
                            mlp_size=2 * fea[4],
                            self_num_layer=self_num_layer,
                            window_size=window_size,
-                        )
+                          )
 
         self.fusion_conv_5 = Convolution(model_num * fea[4], fea[4], 3, 1, 1)
         self.fusion_conv_1 = Convolution(model_num * fea[0], fea[0], 3, 1, 1)
         self.fusion_conv_2 = Convolution(model_num * fea[1], fea[1], 3, 1, 1)
         self.fusion_conv_3 = Convolution(model_num * fea[2], fea[2], 3, 1, 1)
         self.fusion_conv_4 = Convolution(model_num * fea[3], fea[3], 3, 1, 1)
-
-        self.upcat_4 = UpCat(fea[4], fea[3], fea[3], pool_size=pool_size[3],
-                             img_size=(16, 16, 16),token_mixer_size=token_mixer_size)
-        self.upcat_3 = UpCat(fea[3], fea[2], fea[2], pool_size=pool_size[2],
-                             img_size=(32, 32, 32),token_mixer_size=token_mixer_size)
-        self.upcat_2 = UpCat(fea[2], fea[1], fea[1], pool_size=pool_size[1],
-                             img_size=(64, 64, 64),token_mixer_size=token_mixer_size)
-        self.upcat_1 = UpCat(fea[1], fea[0], fea[5], pool_size=pool_size[0],
-                             img_size=(128, 128, 128),token_mixer_size=token_mixer_size)
-
-        self.final_conv = nn.Conv3d(fea[5], out_channels, 1, 1)
 
         self.multiFusion = multi_fusion
 
@@ -81,10 +70,21 @@ class ETUNet(nn.Module):
                                      out_channels=self.fea[1], kernel_size=1, stride_size=1,
                                      padding_size=0)
 
+        self.upcat_4 = UpCat(fea[4], fea[3], fea[3], pool_size=pool_size[3],
+                             img_size=[i*2 for i in self.new_image_size], token_mixer_size=token_mixer_size)
+        self.upcat_3 = UpCat(fea[3], fea[2], fea[2], pool_size=pool_size[2],
+                             img_size=[i*4 for i in self.new_image_size], token_mixer_size=token_mixer_size)
+        self.upcat_2 = UpCat(fea[2], fea[1], fea[1], pool_size=pool_size[1],
+                             img_size=[i*8 for i in self.new_image_size], token_mixer_size=token_mixer_size)
+        self.upcat_1 = UpCat(fea[1], fea[0], fea[5], pool_size=pool_size[0],
+                             img_size=[i*16 for i in self.new_image_size], token_mixer_size=token_mixer_size)
+
+        self.final_conv = nn.Conv3d(fea[5], out_channels, 1, 1)
+
     def forward(self, x):
         assert x.shape[1] == self.model_num  # 4
 
-        encoder_x = self.encoder(x)
+        encoder_x = self.encoder(x) # [1, 4, 128, 128, 128]
 
         encoder_1 = torch.stack([encoder_x[i][4] for i in range(self.model_num)], dim=1)
 
@@ -96,33 +96,53 @@ class ETUNet(nn.Module):
 
         encoder_5 = torch.stack([encoder_x[i][0] for i in range(self.model_num)], dim=1)
 
-        # ESCA
-        fusion_out = self.fusion(encoder_5)
-        encoder_5 = rearrange(encoder_5, "b n c d w h -> b (n c) d w h")
+        # print(encoder_1.shape) # [1, 4, 8, 128, 128, 128]
+        # print(encoder_2.shape) # [1, 4, 8, 64, 64, 64]
+        # print(encoder_3.shape) # [1, 4, 32, 32, 32, 32]
+        # print(encoder_4.shape) # [1, 4, 64, 16, 16, 16]
+        # print(encoder_5.shape) # [1, 4, 128, 8, 8, 8]
 
+        # ESCA
+        fusion_out = self.fusion(encoder_5) # 多模态特征交互
+        # print(fusion_out.shape) # [1, 128, 8, 8, 8]
+        encoder_5 = rearrange(encoder_5, "b n c d w h -> b (n c) d w h") # [1,512,8,8,8] 多模态特征简易融合
         fusion_out_cnn = self.fusion_conv_5(encoder_5)
 
-        fusion_out = fusion_out + fusion_out_cnn
+        # print(fusion_out_cnn.shape) # [1, 128, 8, 8, 8]
+        fusion_out = fusion_out + fusion_out_cnn  # 是否多余了？
 
         encoder_1 = rearrange(encoder_1, "b n c d w h -> b (n c) d w h")
         encoder_2 = rearrange(encoder_2, "b n c d w h -> b (n c) d w h")
         encoder_3 = rearrange(encoder_3, "b n c d w h -> b (n c) d w h")
         encoder_4 = rearrange(encoder_4, "b n c d w h -> b (n c) d w h")
 
-        encoder_1_cnn = self.fusion_conv_1(encoder_1)
+        # print(encoder_4.shape) # torch.Size([1, 256, 8, 8, 8])
+
+        encoder_1_cnn = self.fusion_conv_1(encoder_1) # 融合多模态信息
         encoder_2_cnn = self.fusion_conv_2(encoder_2)
         encoder_3_cnn = self.fusion_conv_3(encoder_3)
         encoder_4_cnn = self.fusion_conv_4(encoder_4)
 
-        if self.multiFusion:
-            encoder_1_down4_cnn = nn.AvgPool3d(kernel_size=8)(encoder_1_cnn)
-            encoder_1_down3_cnn = nn.AvgPool3d(kernel_size=4)(encoder_1_cnn)
-            encoder_1_down2_cnn = nn.AvgPool3d(kernel_size=2)(encoder_1_cnn)
+        # print(encoder_1_cnn.shape) # [1, 8, 128, 128, 128]
+        # print(encoder_2_cnn.shape) # [1, 8, 64, 64, 64]
+        # print(encoder_3_cnn.shape) # [1, 32, 32, 32, 32]
+        # print(encoder_4_cnn.shape) # [1, 64, 16, 16, 16] encoder_5 [1,128,8,8,8]
+        # print(self.new_image_size) # [8, 8, 8]
 
-            encoder_2_down4_cnn = nn.AvgPool3d(kernel_size=4)(encoder_2_cnn)
-            encoder_2_down3_cnn = nn.AvgPool3d(kernel_size=2)(encoder_2_cnn)
+        # 融合多尺度信息
+        if self.multiFusion: # 自适应均值池化自动调整尺寸
 
-            encoder_3_down4_cnn = nn.AvgPool3d(kernel_size=2)(encoder_3_cnn)
+            encoder_1_down4_cnn = nn.AdaptiveAvgPool3d([i * 2 for i in self.new_image_size])(encoder_1_cnn)
+
+            encoder_1_down3_cnn = nn.AdaptiveAvgPool3d([i * 4 for i in self.new_image_size])(encoder_1_cnn)
+
+            encoder_1_down2_cnn = nn.AdaptiveAvgPool3d([i * 8 for i in self.new_image_size])(encoder_1_cnn)
+
+            encoder_2_down4_cnn = nn.AdaptiveAvgPool3d([i * 2 for i in self.new_image_size])(encoder_2_cnn)
+
+            encoder_2_down3_cnn = nn.AdaptiveAvgPool3d([i * 4 for i in self.new_image_size])(encoder_2_cnn)
+
+            encoder_3_down4_cnn = nn.AdaptiveAvgPool3d([i * 2 for i in self.new_image_size])(encoder_3_cnn)
 
             encoder_4_cnn = torch.cat([encoder_1_down4_cnn, encoder_2_down4_cnn, encoder_3_down4_cnn, encoder_4_cnn],
                                       dim=1)
@@ -136,6 +156,7 @@ class ETUNet(nn.Module):
 
             encoder_2_cnn = self.encoder_2(encoder_2_cnn)
 
+        # MSFCA
         u4 = self.upcat_4(fusion_out, encoder_4_cnn)
         u3 = self.upcat_3(u4, encoder_3_cnn)
         u2 = self.upcat_2(u3, encoder_2_cnn)
@@ -146,11 +167,12 @@ class ETUNet(nn.Module):
         return logits
 
 if __name__ == '__main__':
-    model = ETUNet(4, 3, (128, 128, 128))
-    data = torch.randn([1, 4, 128, 128, 128])
-
+    model = ETUNet(4, 3, (64, 64, 64))
+    data = torch.randn([1, 4, 64, 64, 64])
+    # print(model)
     from thop import profile
-
+    #
     flops, params = profile(model, inputs=(data,))
-
+    #
     print(flops / 1e9, params / 1e6)
+    #
