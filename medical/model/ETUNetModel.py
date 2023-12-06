@@ -99,7 +99,7 @@ class ETUNet(nn.Module):
         # ESCA
         fusion_out = self.fusion(encoder_5) 
         # print(fusion_out.shape) # [1, 128, 8, 8, 8]
-        encoder_5 = rearrange(encoder_5, "b n c d w h -> b (n c) d w h") # [1,512,8,8,8] 多模态特征简易融合
+        encoder_5 = rearrange(encoder_5, "b n c d w h -> b (n c) d w h") 
         fusion_out_cnn = self.fusion_conv_5(encoder_5)
 
 
