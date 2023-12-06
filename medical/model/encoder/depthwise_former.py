@@ -12,8 +12,8 @@ class Convolution(nn.Module):
 
         self.conv_1 = nn.Sequential(
             nn.Conv3d(in_channels, out_channels, kernel_size, stride_size, padding_size),
-            nn.InstanceNorm3d(out_channels),
-            nn.ReLU()
+            LayerNormChannel(out_channels),
+            nn.GELU()
         )
 
     def forward(self, x):
@@ -75,31 +75,34 @@ class UpCat(nn.Module):
 
 class MlpChannel(nn.Module):
     """
-    Implementation of MLP with 1*1 convolutions.
+    Implementation of MLP with 1*1*1 convolutions.
     Input: tensor with shape [B, C, H, W]
     """
     def __init__(self, config):
         super().__init__()
         self.fc1 = nn.Conv3d(config.hidden_size, config.mlp_dim, 1)
-        self.act = nn.GELU()
+        self.act = nn.GELU() # 非线性 GELU
         self.fc2 = nn.Conv3d(config.mlp_dim, config.hidden_size, 1)
-        self.drop = nn.Dropout(config.dropout_rate)
+        self.drop1 = nn.Dropout(config.dropout_rate)
+        self.drop2 = nn.Dropout(config.dropout_rate)
 
     def forward(self, x):
         x = self.fc1(x)
         x = self.act(x)
-        x = self.drop(x)
+        x = self.drop1(x)
+
         x = self.fc2(x)
-        x = self.drop(x)
+        x = self.drop2(x)
         return x
 
+# LayerNorm3D
 class LayerNormChannel(nn.Module):
     """
     LayerNorm only for Channel Dimension.
-    Input: tensor in shape [B, C, H, W]
+    Input: tensor in shape [B, C, H, W, D]
     """
 
-    def __init__(self, num_channels, eps=1e-05):
+    def __init__(self, num_channels, eps=1e-6):
         super().__init__()
 
         self.weight = nn.Parameter(torch.ones(num_channels))
@@ -118,7 +121,6 @@ class LayerNormChannel(nn.Module):
 class Embeddings(nn.Module):
     """Construct the embeddings from patch, position embeddings.
     """
-
     def __init__(self, config):
         super(Embeddings, self).__init__()
         self.config = config
@@ -127,16 +129,15 @@ class Embeddings(nn.Module):
 
         self.patch_embeddings = nn.Conv3d(in_channels=in_channels,
                                           out_channels=config.hidden_size,
-                                          kernel_size=3,
+                                          kernel_size=patch_size,
                                           stride=patch_size,
-                                          padding=1
                                           )
 
         self.norm = LayerNormChannel(num_channels=config.hidden_size)
 
     def forward(self, x):
 
-        x = self.patch_embeddings(x)  # (B, hidden. n_patches^(1/2), n_patches^(1/2)) [1,16,64,64,64]
+        x = self.patch_embeddings(x)
 
         x = self.norm(x)
 
@@ -145,38 +146,40 @@ class Embeddings(nn.Module):
 
 class DWBlock(nn.Module):
 
-    def __init__(self, config):
+    def __init__(self, config, ratio = 2):
         super().__init__()
         self.dim = config.hidden_size
         self.window_size = 7
+        self.out_dim = config.hidden_size*ratio
 
-        self.conv0 = nn.Conv3d(self.dim, self.dim * 2, 1, bias=False)
-        self.bn7 = nn.InstanceNorm3d(self.dim * 2)
+        self.conv0 = nn.Conv3d(self.dim, self.out_dim, kernel_size=1, stride=1, bias=False) # 升维
 
-        self.conv = nn.Conv3d(self.dim * 2, self.dim * 2,
-                              kernel_size=self.window_size,
-                              stride=1,
-                              padding=3,
-                              groups=self.dim * 2
-                              )
+        self.ln1 = LayerNormChannel(self.out_dim)
+        self.relu1 = nn.GELU() 
 
-        self.bn8 = nn.InstanceNorm3d(self.dim * 2)
-        self.relu1 = nn.ReLU(inplace=True)
-        self.relu2 = nn.ReLU(inplace=True)
+        self.conv1 = nn.Conv3d(self.out_dim, self.out_dim, kernel_size=self.window_size, stride=1, padding=3,
+                               groups=self.out_dim)
 
-        self.conv2 = nn.Conv3d(self.dim * 2, self.dim, 1, bias=False)
-        self.bn9 = nn.InstanceNorm3d(self.dim)
+        self.gn1 = nn.GroupNorm(self.out_dim, self.out_dim) 
+
+        self.relu2 = nn.GELU()
+
+        self.conv2 = nn.Conv3d(self.out_dim, self.dim, kernel_size=1, stride=1, bias=False) # 逐点卷积
+
+        self.ln2 = LayerNormChannel(self.dim)
 
     def forward(self, x):
 
         x = self.conv0(x)
-        x = self.bn7(x)
+        x = self.ln1(x)
         x = self.relu1(x)
 
-        x = self.conv(x)
-        x = self.bn8(x)
+        x = self.conv1(x)
+        x = self.gn1(x)
         x = self.relu2(x)
+
         x = self.conv2(x)
+        # x = self.ln2(x)
 
         return x
 
@@ -187,7 +190,7 @@ class DWConv(nn.Module):
         super().__init__()
         self.config = config
         self.hidden_size = config.hidden_size
-        self.attention_norm = LayerNormChannel(config.hidden_size, eps=1e-6)
+        self.attention_norm = LayerNormChannel(config.hidden_size, eps=1e-6) # 3D LayerNorm
         self.ffn_norm = LayerNormChannel(config.hidden_size, eps=1e-6)
         self.ffn = MlpChannel(config)
         self.attn = DWBlock(config)
@@ -197,6 +200,7 @@ class DWConv(nn.Module):
         x = self.attention_norm(x)
         x = self.attn(x) + x
         x = x + h
+
         h = x
         x = self.ffn_norm(x)
         x = self.ffn(x)
@@ -214,13 +218,6 @@ class DepthWiseformer(nn.Module):
                  num_layers,
                  pool_ratio,
                  ):
-
-        '''
-        self.down_1 = GlobalPoolformer(16, 16, img_size=(64,64,64), patch_size=(2,2,2), mlp_size=32, num_layers=2)
-        self.down_2 = GlobalPoolformer(16, 32, img_size=(32,32,32), patch_size=(2,2,2), mlp_size=64, num_layers=2)
-        self.down_3 = GlobalPoolformer(32, 64, img_size=(16,16,16), patch_size=(2,2,2), mlp_size=128, num_layers=2)
-        self.down_4 = GlobalPoolformer(64, 128, img_size=(8,8,8), patch_size=(2,2,2), mlp_size=256, num_layers=2)
-        '''
 
         super().__init__()
 
@@ -245,6 +242,7 @@ class DepthWiseformer(nn.Module):
     def forward(self, x, out_hidden=False):
 
         x = self.embeddings(x)
+
         hidden_state = []
 
         for l in self.block_list:
@@ -319,7 +317,7 @@ class DWFormerEncoder(nn.Module):
     def __init__(self, model_num,
                  img_size,
                  fea,
-                 pool_size,  # patch_size 每个stage下采样用的卷积核和步长大小
+                 pool_size,
                  ):
         '''
         model_num=model_num,# 4
@@ -343,7 +341,7 @@ class DWFormerEncoder(nn.Module):
 
     def forward(self, x):
         encoder_out = []
-        x = x.unsqueeze(dim=2)  # [1,4,1,128,128,128]
+        x = x.unsqueeze(dim=2) 
 
         for i in range(self.model_num):  # 4
             encoder_out.append(self.encoders[i](x[:, i]))
