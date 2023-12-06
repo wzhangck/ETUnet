@@ -81,7 +81,7 @@ class MlpChannel(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.fc1 = nn.Conv3d(config.hidden_size, config.mlp_dim, 1)
-        self.act = nn.GELU() # 非线性 GELU
+        self.act = nn.GELU() 
         self.fc2 = nn.Conv3d(config.mlp_dim, config.hidden_size, 1)
         self.drop1 = nn.Dropout(config.dropout_rate)
         self.drop2 = nn.Dropout(config.dropout_rate)
@@ -164,7 +164,7 @@ class DWBlock(nn.Module):
 
         self.relu2 = nn.GELU()
 
-        self.conv2 = nn.Conv3d(self.out_dim, self.dim, kernel_size=1, stride=1, bias=False) # 逐点卷积
+        self.conv2 = nn.Conv3d(self.out_dim, self.dim, kernel_size=1, stride=1, bias=False)
 
         self.ln2 = LayerNormChannel(self.dim)
 
