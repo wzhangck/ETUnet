@@ -3,34 +3,7 @@ import torch
 from .layers import Attention, PostionEmbedding, get_config, Mlp
 from einops.layers.torch import Rearrange
 from einops import rearrange, repeat
-
-
-class Embeddings(nn.Module):
-    """Construct the embeddings from patch, position embeddings.
-    """
-
-    def __init__(self, config, types=0, is_window=False):
-        super(Embeddings, self).__init__()
-        self.is_window = is_window
-        self.types = types
-        self.config = config
-        in_channels = config.in_channels
-        patch_size = config.patch_size
-
-        self.patch_embeddings = nn.Conv3d(in_channels=in_channels,
-                                          out_channels=config.hidden_size,
-                                          kernel_size=patch_size,
-                                          stride=patch_size
-                                          )
-
-        self.dropout = nn.Dropout(config.dropout_rate)
-
-    def forward(self, x):
-
-        x = self.patch_embeddings(x)
-
-        return x
-
+from medical.model.encoder.depthwise_former import Embeddings
 
 class WinAttn_SepViT(nn.Module):
     def __init__(self, config, dropout=0.1, window_size=2):
@@ -150,15 +123,16 @@ class SpatialAttn(nn.Module):
             self.dAttn_position = PostionEmbedding(config, img_size=self.dAtttn_position_shape, types=1)
             self.hAttn_position = PostionEmbedding(config, img_size=self.hAtttn_position_shape, types=1)
             self.wAttn_position = PostionEmbedding(config, img_size=self.wAtttn_position_shape, types=1)
-            self.window_position = PostionEmbedding(config,img_size=None, types=2)
+            self.window_position = PostionEmbedding(config, img_size=None, types=2)
 
     def forward(self, x):
 
-        batch_size, hidden_size, D, W, H = x.shape
+        batch_size, hidden_size, D, W, H = x.shape # [1,128,8,8,8]
 
         x_1 = rearrange(x, "b c d w h -> (b w h) d c")
         x_2 = rearrange(x, "b c d w h -> (b h d) w c")
         x_3 = rearrange(x, "b c d w h -> (b w d) h c")
+        x_4 = x
 
         if self.is_position:
             x_1 = self.dAttn_position(x_1)
@@ -172,24 +146,25 @@ class SpatialAttn(nn.Module):
 
         x_3 = self.h_attention(x_3)
 
-        x_4 = self.window_attention(x_4)
-
         x_1 = rearrange(x_1, "(b w h) d c -> b (d w h) c", d=D, w=W, h=H)  # [B,N,C]
 
         x_2 = rearrange(x_2, "(b w d) h c -> b (d w h) c", d=D, w=W, h=H)  # [B,N,C]
 
         x_3 = rearrange(x_3, "(b h d) w c -> b (d w h) c", d=D, w=W, h=H)  # [B,N,C]
 
-        out = x_1 + x_2 + x_3 + x_4
+        if D == 1: # CT Dataset
+            out = x_1 + x_2 + x_3
+        else:
+            x_4 = self.window_attention(x_4)
+            out = x_1 + x_2 + x_3 + x_4
 
         return out
-
 
 class ChannelAttn(nn.Module):
     def __init__(self, config, k_size=3):
         super(ChannelAttn, self).__init__()
 
-        self.dim = config.hidden_size  # 输入通道数
+        self.dim = config.hidden_size  
         self.avg_pool = nn.AdaptiveAvgPool3d(1)
         self.conv = nn.Conv1d(1, 1, kernel_size=k_size, padding=(k_size - 1) // 2, bias=False)
         self.sigmoid = nn.Sigmoid()
@@ -206,7 +181,7 @@ class ChannelAttn(nn.Module):
 
 
 class MultiAttBlock(nn.Module):
-    def __init__(self, config, is_position=False):
+    def __init__(self, config, is_position=True):
         super(MultiAttBlock, self).__init__()
         self.config = config
         self.input_shape = config.img_size
@@ -223,7 +198,7 @@ class MultiAttBlock(nn.Module):
 
         batch_size, hidden_size, D, W, H = x.shape  # B,C,D,W,H
 
-        x = rearrange(x, "b c d w h -> b (d w h) c")
+        x = rearrange(x, "b c d w h -> b (d w h) c") # [B,N,C]
 
         h = x
 
@@ -294,6 +269,7 @@ class MultiAttentionFusion(nn.Module):
             ])
 
         self.embeddings = Embeddings(self.config)
+
         self.out_hidden = out_hidden
 
     def forward(self, x):  # [1, 4*128, 8, 8, 8]
