@@ -7,7 +7,7 @@ import ml_collections
 from torch.nn import functional as F
 
 
-# 配置文件类
+
 def get_config(in_channels=1,
                hidden_size=128,
                img_size=(1, 1, 1),
@@ -41,7 +41,7 @@ def get_config(in_channels=1,
 def swish(x):
     return x * torch.sigmoid(x)
 
-# 激活函数
+
 ACT2FN = {"gelu": torch.nn.functional.gelu, "relu": torch.nn.functional.relu, "swish": swish}
 
 
