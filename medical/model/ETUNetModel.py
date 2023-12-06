@@ -30,7 +30,7 @@ class ETUNet(nn.Module):
 
             image_size_s.append((image_size_s[-1][0] // p[0], image_size_s[-1][1] // p[1], image_size_s[-1][2] // p[2]))
 
-        # new_image_size——[8,8,8]
+
         self.new_image_size = [image_size[i] // pool_size_all[i] for i in range(3)]
 
         self.encoder = DWFormerEncoder(model_num=model_num,  # 4
@@ -96,41 +96,27 @@ class ETUNet(nn.Module):
 
         encoder_5 = torch.stack([encoder_x[i][0] for i in range(self.model_num)], dim=1)
 
-        # print(encoder_1.shape) # [1, 4, 8, 128, 128, 128]
-        # print(encoder_2.shape) # [1, 4, 8, 64, 64, 64]
-        # print(encoder_3.shape) # [1, 4, 32, 32, 32, 32]
-        # print(encoder_4.shape) # [1, 4, 64, 16, 16, 16]
-        # print(encoder_5.shape) # [1, 4, 128, 8, 8, 8]
-
         # ESCA
-        fusion_out = self.fusion(encoder_5) # 多模态特征交互
+        fusion_out = self.fusion(encoder_5) 
         # print(fusion_out.shape) # [1, 128, 8, 8, 8]
         encoder_5 = rearrange(encoder_5, "b n c d w h -> b (n c) d w h") # [1,512,8,8,8] 多模态特征简易融合
         fusion_out_cnn = self.fusion_conv_5(encoder_5)
 
-        # print(fusion_out_cnn.shape) # [1, 128, 8, 8, 8]
-        fusion_out = fusion_out + fusion_out_cnn  # 是否多余了？
+
+        fusion_out = fusion_out + fusion_out_cnn  
 
         encoder_1 = rearrange(encoder_1, "b n c d w h -> b (n c) d w h")
         encoder_2 = rearrange(encoder_2, "b n c d w h -> b (n c) d w h")
         encoder_3 = rearrange(encoder_3, "b n c d w h -> b (n c) d w h")
         encoder_4 = rearrange(encoder_4, "b n c d w h -> b (n c) d w h")
 
-        # print(encoder_4.shape) # torch.Size([1, 256, 8, 8, 8])
 
-        encoder_1_cnn = self.fusion_conv_1(encoder_1) # 融合多模态信息
+        encoder_1_cnn = self.fusion_conv_1(encoder_1) 
         encoder_2_cnn = self.fusion_conv_2(encoder_2)
         encoder_3_cnn = self.fusion_conv_3(encoder_3)
         encoder_4_cnn = self.fusion_conv_4(encoder_4)
 
-        # print(encoder_1_cnn.shape) # [1, 8, 128, 128, 128]
-        # print(encoder_2_cnn.shape) # [1, 8, 64, 64, 64]
-        # print(encoder_3_cnn.shape) # [1, 32, 32, 32, 32]
-        # print(encoder_4_cnn.shape) # [1, 64, 16, 16, 16] encoder_5 [1,128,8,8,8]
-        # print(self.new_image_size) # [8, 8, 8]
-
-        # 融合多尺度信息
-        if self.multiFusion: # 自适应均值池化自动调整尺寸
+        if self.multiFusion: 
 
             encoder_1_down4_cnn = nn.AdaptiveAvgPool3d([i * 2 for i in self.new_image_size])(encoder_1_cnn)
 
@@ -169,10 +155,6 @@ class ETUNet(nn.Module):
 if __name__ == '__main__':
     model = ETUNet(4, 3, (64, 64, 64))
     data = torch.randn([1, 4, 64, 64, 64])
-    # print(model)
     from thop import profile
-    #
     flops, params = profile(model, inputs=(data,))
-    #
     print(flops / 1e9, params / 1e6)
-    #
