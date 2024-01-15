@@ -17,3 +17,6 @@ pandas=1.5.3
 scikit-learn=1.1.3
 tensorboardX=2.6
 torchvision=0.12
+
+# Cited 
+NestedFormer
