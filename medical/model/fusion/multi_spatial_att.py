@@ -148,9 +148,9 @@ class SpatialAttn(nn.Module):
 
         x_1 = rearrange(x_1, "(b w h) d c -> b (d w h) c", d=D, w=W, h=H)  # [B,N,C]
 
-        x_2 = rearrange(x_2, "(b w d) h c -> b (d w h) c", d=D, w=W, h=H)  # [B,N,C]
+        x_2 = rearrange(x_2, "(b h d) w c -> b (d w h) c", d=D, w=W, h=H)  # [B,N,C]
 
-        x_3 = rearrange(x_3, "(b h d) w c -> b (d w h) c", d=D, w=W, h=H)  # [B,N,C]
+        x_3 = rearrange(x_3, "(b w d) h c -> b (d w h) c", d=D, w=W, h=H)  # [B,N,C]
 
         if D == 1: # CT Dataset
             out = x_1 + x_2 + x_3
